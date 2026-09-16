@@ -46,11 +46,17 @@ class LocalDatabase:
         defaults = {
             "base_wpm": "300",
             "font_family": "Arial",
-            "font_size": "48",
+            "font_size": "56",
             "night_mode": "false",
+            "animations": "true",
+            "focus_letter": "true",
+            "show_hud": "true",
+            "show_virtual_controls": "true",
+            "instruction_gain": "1.0",
+            "server_url": "http://127.0.0.1:8000",
             "text_color": "#FFFFFF",
             "bg_color": "#121212",
-            "eye_tracking_enabled": "true"
+            "eye_tracking_enabled": "false"
         }
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -171,10 +177,11 @@ class LocalDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-    def get_book_payload(self, book_id: str) -> Optional[Tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+    def get_book_payload(self, book_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
         """
         Retrieves book details and its full word token/instruction payload.
-        Returns: (book_metadata_dict, tokens_list)
+        Always returns a 2-tuple so callers can unpack it unconditionally:
+            (book_metadata_dict, tokens_list) or (None, None)
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -182,20 +189,43 @@ class LocalDatabase:
             book_row = cursor.fetchone()
 
             if not book_row:
-                return None
+                return None, None
 
             cursor.execute("SELECT payload_json FROM book_payloads WHERE book_id = ?", (book_id,))
             payload_row = cursor.fetchone()
 
             if not payload_row:
-                return None
+                return dict(book_row), None
 
             tokens = json.loads(payload_row["payload_json"])
             return dict(book_row), tokens
+
+    def get_last_read_book(self) -> Optional[Dict[str, Any]]:
+        """Most recently opened book, for the CONTINUA button."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, title, author, total_words, current_word_index,
+                       progress_percentage, last_read_timestamp
+                FROM books
+                ORDER BY last_read_timestamp DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def book_exists(self, book_id: str) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM books WHERE id = ?", (book_id,))
+            return cursor.fetchone() is not None
 
     def delete_book(self, book_id: str):
         """Removes a book and its payload from local storage."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM book_payloads WHERE book_id = ?", (book_id,))
             cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
             conn.commit()
